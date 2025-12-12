@@ -21,7 +21,7 @@ import {
   Sparkles,
   Lightbulb,
   BrainCircuit,
-  KeyRound // APIキー用アイコン
+  KeyRound 
 } from 'lucide-react';
 
 // Firebase Imports
@@ -47,6 +47,7 @@ import {
 } from 'firebase/firestore';
 
 // --- Firebase Configuration & Initialization ---
+// 【重要】ここの中身を、あなたのFirebaseコンソールからコピーした内容に書き換えてください！
 const firebaseConfig = {
   apiKey: "AIzaSyBHfWncijNrKBKgUIdOVuyA5WDI9Vj_Z4A",
   authDomain: "karaoke-app-b7e0a.firebaseapp.com",
@@ -56,10 +57,14 @@ const firebaseConfig = {
   appId: "1:1085274180598:web:df306dcbe9ee748c6955d7",
   measurementId: "G-3W9LNHSPND"
 };
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const appId = 'my-karaoke-app';
+
+// ★ここが変更点！データを共有するための「共通ID」を定義
+const SHARED_USER_ID = 'shared_vocalog_data'; 
 
 // --- Constants & Helpers ---
 const SCORES = ['10', '9', '8', '7', '6', '5', '4', '3', '2', '1', '-'];
@@ -75,7 +80,7 @@ const getKeyValue = (key) => {
   return parseInt(key, 10);
 };
 
-// Gemini API Call Helper (Dynamic Key)
+// Gemini API Call Helper
 const callGemini = async (prompt, apiKey) => {
   if (!apiKey) throw new Error("APIキーが設定されていません");
   
@@ -108,7 +113,7 @@ const callGemini = async (prompt, apiKey) => {
   }
 };
 
-// XLSX Library Loader (CDN)
+// XLSX Library Loader
 const loadXLSX = () => {
   return new Promise((resolve, reject) => {
     if (window.XLSX) {
@@ -265,11 +270,11 @@ export default function App() {
   useEffect(() => {
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+        if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "AIzaSy...") {
+          console.warn("Firebase Config not set properly");
+          return;
         }
+        await signInAnonymously(auth);
       } catch (error) {
         console.error("Auth Error:", error);
         showMessage("認証エラーが発生しました", "error");
@@ -277,13 +282,9 @@ export default function App() {
     };
     initAuth();
     
-    // APIキーの読み込み
     const savedKey = localStorage.getItem('gemini_api_key');
     if (savedKey) {
       setGeminiApiKey(savedKey);
-    } else {
-      // 初回起動時（キーがない場合）は本当はここでモーダルを出してもいいが
-      // ユーザーがAIボタンを押したときに出す仕様にする
     }
 
     const unsubscribe = onAuthStateChanged(auth, setUser);
@@ -294,8 +295,9 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     
+    // 【修正点】user.uid ではなく SHARED_USER_ID を使う
     const q = query(
-      collection(db, 'artifacts', appId, 'users', user.uid, 'songs'),
+      collection(db, 'artifacts', appId, 'users', SHARED_USER_ID, 'songs'),
       orderBy('createdAt', 'desc')
     );
 
@@ -317,7 +319,6 @@ export default function App() {
 
   // --- AI Analysis Function ---
   const handleAiAnalysis = async () => {
-    // APIキーが未設定なら設定画面を開く
     if (!geminiApiKey) {
       setShowApiKeyModal(true);
       return;
@@ -360,10 +361,8 @@ export default function App() {
     `;
 
     try {
-      // 保持しているAPIキーを使用
       const jsonString = await callGemini(prompt, geminiApiKey);
       if (jsonString) {
-        // 余計な文字（Markdownのコードブロックなど）が含まれている場合の除去
         const cleanJson = jsonString.replace(/```json|```/g, '').trim();
         const result = JSON.parse(cleanJson);
         setAiAnalysisResult(result);
@@ -373,8 +372,6 @@ export default function App() {
     } catch (error) {
       console.error("AI Analysis Error:", error);
       showMessage("分析に失敗しました。APIキーが正しいか確認してください。", "error");
-      // エラー時にAPIキーを再入力させたい場合は以下を有効化
-      // setShowApiKeyModal(true); 
     } finally {
       setAiAnalysisLoading(false);
     }
@@ -389,15 +386,13 @@ export default function App() {
   };
 
   // --- Layout & Scaling Logic ---
-  // 幅いっぱいを使うためのスタイル調整
-  // max-w-6xl などの固定制限を外し、w-fullとパーセンテージで構成
   const containerStyle = {
     width: '100%',
-    padding: '0 0.5rem', // px-2相当
+    padding: '0 0.5rem',
   };
 
   const gridTemplateColumns = isEditing 
-    ? '3em 2fr 1.5fr 3.5em 2fr 2fr 3em 3em' // frを使って比率で幅を決める
+    ? '3em 2fr 1.5fr 3.5em 2fr 2fr 3em 3em'
     : '3em 2fr 1.5fr 3.5em 2fr 2fr 3em';
 
   const gridStyle = {
@@ -415,7 +410,7 @@ export default function App() {
 
   const scrollContainerStyle = {
     width: '100%',
-    minWidth: '600px' // 最低限の幅は確保し、それ以上は画面に合わせて伸びる
+    minWidth: '600px'
   };
 
   // --- Sorting & Freezing Logic ---
@@ -498,16 +493,16 @@ export default function App() {
     setSortConfig({ key, direction });
   };
 
-  // CRUD
+  // CRUD Actions (Update SHARED_USER_ID)
   const updateSong = async (id, field, value) => {
     if (!user) return;
-    const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'songs', id);
+    const ref = doc(db, 'artifacts', appId, 'users', SHARED_USER_ID, 'songs', id);
     await updateDoc(ref, { [field]: value });
   };
 
   const addNewSong = async () => {
     if (!user) return;
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'songs'), {
+    await addDoc(collection(db, 'artifacts', appId, 'users', SHARED_USER_ID, 'songs'), {
       title: '',
       artist: '',
       score: '-',
@@ -540,7 +535,7 @@ export default function App() {
     if (!user) return;
     
     try {
-      const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'songs', id);
+      const ref = doc(db, 'artifacts', appId, 'users', SHARED_USER_ID, 'songs', id);
       await deleteDoc(ref);
       showMessage(`削除しました`, "success");
     } catch (error) {
@@ -617,7 +612,7 @@ export default function App() {
             return;
           }
 
-          const songsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'songs');
+          const songsRef = collection(db, 'artifacts', appId, 'users', SHARED_USER_ID, 'songs');
           const snapshot = await getDocs(songsRef);
           const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref));
           await Promise.all(deletePromises);
@@ -786,7 +781,7 @@ export default function App() {
 
       {/* Top Search Area */}
       <div className="sticky top-0 z-20 bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400 pt-4 px-2 pb-2 shadow-lg w-full">
-        {/* Header Buttons Container - gapで均等間隔に */}
+        {/* Header Buttons Container */}
         <div className="flex w-full gap-2 overflow-x-auto px-2 mb-2" style={containerStyle}>
           <HeaderButton mode="title" label="曲名" colorClass="bg-blue-500" icon={Music} activeMode={searchMode} onClick={setSearchMode} animationClass="animate-swing" />
           <HeaderButton mode="artist" label="歌手" colorClass="bg-red-500" icon={User} activeMode={searchMode} onClick={setSearchMode} animationClass="animate-jump" />
@@ -803,7 +798,7 @@ export default function App() {
           >
             <Dice5 size={18} className={`group-hover:rotate-180 transition-transform duration-500 ${isRouletteSpinning ? 'animate-spin' : ''}`} />
             <span className="hidden md:inline whitespace-nowrap">おまかせ10選</span>
-            <span className="md:hidden whitespace-nowrap">10選</span>
+            <span className="md:hidden whitespace-nowrap text-[10px]">10選</span>
           </button>
 
           {/* AI Analysis Button */}
@@ -817,7 +812,7 @@ export default function App() {
           >
             <BrainCircuit size={18} className={`group-hover:scale-110 transition-transform duration-300 ${aiAnalysisLoading ? 'animate-pulse' : ''}`} />
             <span className="hidden md:inline whitespace-nowrap">AI分析</span>
-            <span className="md:hidden whitespace-nowrap">AI</span>
+            <span className="md:hidden whitespace-nowrap text-[10px]">AI</span>
           </button>
 
           <button
@@ -830,7 +825,7 @@ export default function App() {
           >
             {isEditing ? <Check size={18} className="animate-bounce" /> : <Edit3 size={18} />}
             <span className="hidden md:inline whitespace-nowrap">{isEditing ? '編集完了' : 'リスト編集'}</span>
-            <span className="md:hidden whitespace-nowrap">{isEditing ? '完了' : '編集'}</span>
+            <span className="md:hidden whitespace-nowrap text-[10px]">{isEditing ? '完了' : '編集'}</span>
           </button>
         </div>
 
@@ -1119,7 +1114,7 @@ export default function App() {
       {/* Roulette Results Modal */}
       {rouletteResults && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col border-4 border-orange-300 overflow-hidden relative max-h-[80vh]">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col border-4 border-orange-300 overflow-hidden relative max-h-[90vh]">
             <div className="bg-orange-500 p-4 text-white shrink-0 flex justify-between items-center">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <Dice5 size={24} className="animate-spin-slow" /> おまかせ10選
